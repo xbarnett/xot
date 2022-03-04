@@ -207,15 +207,13 @@ get_latex es sss = if length bss > 256 || length (concat sss) > 256 then Nothing
       drop (i + 1) ss
 
 compile_latex :: String -> String -> IO B.ByteString
-compile_latex s dir = do
-  I.setCurrentDirectory dir
-  I.writeFile "sol.tex" s
-  PR.callProcess "/usr/bin/pdflatex" ["sol.tex"]
-  PR.callProcess "/usr/bin/pdftoppm" ["-png", "-rx", "300", "-ry", "300",
-                                      "sol.pdf", "sol"]
-  result <- I.withFile "sol-1.png" I.ReadMode B.hGetContents
-  I.setCurrentDirectory ".."
-  return result
+compile_latex s dir = I.withCurrentDirectory dir
+  (do
+     I.writeFile "sol.tex" s
+     PR.callProcess "/usr/bin/pdflatex" ["sol.tex"]
+     PR.callProcess "/usr/bin/pdftoppm" ["-png", "-rx", "300", "-ry", "300",
+                                         "sol.pdf", "sol"]
+     I.withFile "sol-1.png" I.ReadMode B.hGetContents)
 
 generate_truth_table :: String -> IO (Either String B.ByteString)
 generate_truth_table formula =
@@ -224,5 +222,5 @@ generate_truth_table formula =
     Right (es, sss) -> case get_latex es sss of
         Nothing -> return (Left "formula too complicated")
         Just code -> do
-          image <- I.withTempDirectory "." "tempdir" (compile_latex code)
+          image <- I.withSystemTempDirectory "xot" (compile_latex code)
           return (Right image)
