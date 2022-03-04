@@ -1,5 +1,7 @@
 module Main where
+import qualified TruthTable
 import qualified Control.Monad.IO.Class as MO
+import qualified Data.ByteString as B
 import qualified Data.Char as C
 import qualified Data.List as L
 import qualified Data.Text as T
@@ -18,17 +20,33 @@ on_end = putStrLn "xot has ended"
 is_bad_message :: String -> Bool
 is_bad_message = all C.isSpace
 
+general_send_message :: D.ChannelId -> String -> Maybe B.ByteString ->
+  D.DiscordHandler ()
+general_send_message channel content bs = if is_bad_message content
+  then return () else do
+  let content_text = T.pack content
+  result <- case bs of
+    Nothing -> D.restCall (D.CreateMessage channel content_text)
+    Just bs -> D.restCall (D.CreateMessageUploadFile channel content_text bs)
+  case result of
+    Left e -> MO.liftIO (putStrLn ("message send error: " ++ show e))
+    Right _ -> return ()
+
 send_message :: D.ChannelId -> String -> D.DiscordHandler ()
-send_message channel content = if is_bad_message content then return () else do
-    result <- D.restCall (D.CreateMessage channel (T.pack content))
-    case result of
-      Left e -> MO.liftIO (putStrLn ("message send error: " ++ show e))
-      Right _ -> return ()
+send_message channel content = general_send_message channel content Nothing
+
+generate_truth_table :: D.ChannelId -> String -> D.DiscordHandler ()
+generate_truth_table channel formula = do
+  result <- MO.liftIO (TruthTable.generate_truth_table formula)
+  case result of
+    Left e -> send_message channel ("error: " ++ e)
+    Right bs -> general_send_message channel "truth-table.png" (Just bs)
 
 process_command :: D.ChannelId -> String -> D.DiscordHandler ()
 process_command channel command = case func_name of
   "echo" -> send_message channel arg
-  "reverse" -> send_message channel (reverse arg)
+  "rev" -> send_message channel (reverse arg)
+  "tt" -> generate_truth_table channel arg
   _ -> send_message channel "xot does not understand that"
   where
     func_name :: String
