@@ -2,7 +2,6 @@ module Main where
 import qualified Control.Monad.IO.Class as MO
 import qualified Data.Char as C
 import qualified Data.List as L
-import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Discord as D
@@ -16,27 +15,21 @@ on_start = MO.liftIO (putStrLn "xot has started")
 on_end :: IO ()
 on_end = putStrLn "xot has ended"
 
-data Action = ActionSendMessage D.ChannelId String
-
 is_bad_message :: String -> Bool
 is_bad_message = all C.isSpace
 
-execute_action :: Action -> D.DiscordHandler ()
-execute_action (ActionSendMessage channel content) = if is_bad_message content
-  then return () else do
+send_message :: D.ChannelId -> String -> D.DiscordHandler ()
+send_message channel content = if is_bad_message content then return () else do
     result <- D.restCall (D.CreateMessage channel (T.pack content))
     case result of
       Left e -> MO.liftIO (putStrLn ("message send error: " ++ show e))
       Right _ -> return ()
 
-string_func_map :: M.Map String (String -> String)
-string_func_map = M.fromList [("echo", id)
-                             ,("reverse", reverse)]
-
-command_to_actions :: D.ChannelId -> String -> [Action]
-command_to_actions channel command = case M.lookup func_name string_func_map of
-  Nothing -> [ActionSendMessage channel "xot does not understand that"]
-  Just f -> [ActionSendMessage channel (f arg)]
+process_command :: D.ChannelId -> String -> D.DiscordHandler ()
+process_command channel command = case func_name of
+  "echo" -> send_message channel arg
+  "reverse" -> send_message channel (reverse arg)
+  _ -> send_message channel "xot does not understand that"
   where
     func_name :: String
     arg :: String
@@ -44,25 +37,16 @@ command_to_actions channel command = case M.lookup func_name string_func_map of
       Nothing -> (command, "")
       Just i -> (take i command, drop (i + 1) command)
 
-message_to_actions :: D.Message -> [Action]
-message_to_actions message = if (D.userIsBot (D.messageAuthor message))
-  then []
-  else case L.stripPrefix prefix content of
-         Just command -> command_to_actions channel command
-         Nothing -> []
-  where
-    channel :: D.ChannelId
-    channel = D.messageChannelId message
-
-    content :: String
-    content = T.unpack (D.messageContent message)
-
-    prefix :: String
-    prefix = "?"
+process_message :: D.Message -> D.DiscordHandler ()
+process_message message = if (D.userIsBot (D.messageAuthor message))
+  then return ()
+  else case L.stripPrefix "?" (T.unpack (D.messageContent message)) of
+         Just command -> process_command (D.messageChannelId message) command
+         Nothing -> return ()
 
 on_event :: D.Event -> D.DiscordHandler ()
 on_event event = case event of
-  D.MessageCreate message -> mapM_ execute_action (message_to_actions message)
+  D.MessageCreate message -> process_message message
   _ -> return ()
 
 main :: IO ()
