@@ -67,7 +67,7 @@ lift_binary name op_strings assoc fun = map (\op_string ->
     lifted_fun (e0, s0) (e1, s1) = (fun e0 e1, s0 ++ [name] ++ s1)
 
 prefix_ops :: M.Map String (SExpr -> SExpr)
-prefix_ops = M.fromList (lift_unary "\\Sim" ["~", "not"] Not)
+prefix_ops = M.fromList (lift_unary "\\Sim" ["~", "!", "not"] Not)
 
 infix_ops :: [M.Map String (OP.Assoc, SExpr -> SExpr -> SExpr)]
 infix_ops = map (M.fromList . concat) [
