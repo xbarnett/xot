@@ -6,13 +6,14 @@ import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
+import qualified OpParse as OP
 import qualified System.Directory as I
 import qualified System.IO as I
 import qualified System.IO.Temp as I
 import qualified System.Process as PR
 import qualified Text.Parsec as P
-import qualified Text.Parsec.Expr as P
 import qualified Text.Parsec.String as P
+import qualified Text.Parsec.Token as P
 
 data Expr = Var Char |
   Not Expr |
@@ -20,19 +21,18 @@ data Expr = Var Char |
   Or Expr Expr |
   Xor Expr Expr |
   Cond Expr Expr |
+  If Expr Expr |
   Bicond Expr Expr
   deriving (Show)
 
-parse_var :: P.Parser (Expr, [String])
-parse_var = do
-  result <- P.lower
-  return (Var result, [[result]])
+type SExpr = (Expr, [String])
 
-paren_type :: String -> String -> P.Parser (Expr, [String])
-  -> P.Parser (Expr, [String])
+paren_type :: String -> String -> P.Parser SExpr -> P.Parser SExpr
 paren_type p0 p1 parser = do
+  P.spaces
   P.string p0
   (e, s0) <- parser
+  P.spaces
   P.string p1
   let s1 = (p0 ++ head s0) : tail s0
   let s2 = init s1 ++ [last s1 ++ p1]
@@ -41,45 +41,50 @@ paren_type p0 p1 parser = do
 paren_strings :: [(String, String)]
 paren_strings = [("(", ")"), ("[", "]"), ("{", "}")]
 
-parens :: P.Parser (Expr, [String]) -> P.Parser (Expr, [String])
+parens :: P.Parser SExpr -> P.Parser SExpr
 parens parser = P.choice (map (\(p0, p1) -> paren_type p0 p1 parser)
   paren_strings)
 
-parse_term :: P.Parser (Expr, [String])
-parse_term = do
+parse_literal :: P.Parser SExpr
+parse_literal = do
   P.spaces
-  result <- parens parse_expr P.<|> parse_var
-  P.spaces
-  return result
+  result <- P.satisfy C.isAsciiLower
+  return (Var result, [[result]])
 
-data Operator = Prefix String [String] (Expr -> Expr) |
-  Infix String [String] (Expr -> Expr -> Expr) P.Assoc
+lift_unary :: String -> [String] -> (Expr -> Expr) -> [(String, SExpr -> SExpr)]
+lift_unary name op_strings fun = map (\op_string -> (op_string, lifted_fun))
+  op_strings
+  where
+    lifted_fun :: SExpr -> SExpr
+    lifted_fun (e, s) = (fun e, name : s)
 
-operators :: [[Operator]]
-operators = [
-  [Prefix "\\Sim" ["~", "not"] Not],
-  [Infix "\\land" ["&", "and"] And P.AssocLeft,
-   Infix "\\lor" ["|", "or"] Or P.AssocLeft,
-   Infix "\\oplus" ["xor"] Xor P.AssocLeft],
-  [Infix "\\to" [">", "->", "to", "implies"] Cond P.AssocLeft,
-   Infix "\\leftrightarrow" ["<>", "<->", "iff"] Bicond P.AssocLeft]]
+lift_binary :: String -> [String] -> OP.Assoc -> (Expr -> Expr -> Expr) ->
+  [(String, (OP.Assoc, SExpr -> SExpr -> SExpr))]
+lift_binary name op_strings assoc fun = map (\op_string ->
+  (op_string, (assoc, lifted_fun))) op_strings
+  where
+    lifted_fun :: SExpr -> SExpr -> SExpr
+    lifted_fun (e0, s0) (e1, s1) = (fun e0 e1, s0 ++ [name] ++ s1)
 
-convert_op :: Operator -> [P.Operator String () F.Identity (Expr, [String])]
-convert_op (Prefix lname names fun) = map (\name -> P.Prefix (do
-  P.try (P.string name)
-  return (\(e0, s0) -> (fun e0, lname : s0)))) names
-convert_op (Infix lname names fun assoc) = map (\name -> P.Infix (do
-  P.try (P.string name)
-  return (\(e0, s0) (e1, s1) -> (fun e0 e1, s0 ++ [lname] ++ s1)))
-    assoc) names
+prefix_ops :: M.Map String (SExpr -> SExpr)
+prefix_ops = M.fromList (lift_unary "\\Sim" ["~", "not"] Not)
 
-parse_expr :: P.Parser (Expr, [String])
-parse_expr = P.buildExpressionParser (map (concat . (map convert_op)) operators)
-  parse_term
+infix_ops :: [M.Map String (OP.Assoc, SExpr -> SExpr -> SExpr)]
+infix_ops = map (M.fromList . concat) [
+  [
+  lift_binary "\\to" [">", "->", "implies", "only if"] OP.LeftAssoc Cond,
+  lift_binary "\\leftarrow" ["<", "<-", "if"] OP.LeftAssoc If,
+  lift_binary "\\leftrightarrow" ["<>", "<->", "=", "iff", "if and only if"]
+    OP.LeftAssoc Bicond],
+  [
+  lift_binary "\\land" ["&", "&&", "*", "and"] OP.LeftAssoc And,
+  lift_binary "\\lor" ["|", "||", "+", "or"] OP.LeftAssoc Or,
+  lift_binary "\\oplus" ["!=", "xor"] OP.LeftAssoc Xor]]
 
 fix_braces :: String -> String
-fix_braces = T.unpack . T.replace (T.pack "{") (T.pack "\\{") .
-  T.replace (T.pack "}") (T.pack "\\}") . T.pack
+fix_braces "" = ""
+fix_braces (c : cs) = (if c == '{' then "\\{" else if c == '}' then "\\}"
+  else [c]) ++ fix_braces cs
 
 modify_header_string :: String -> String
 modify_header_string s = (if (null s0) then "" else ("\\llap{" ++
@@ -98,16 +103,21 @@ modify_header_string s = (if (null s0) then "" else ("\\llap{" ++
     s1 :: String
     s1 = [c | (i, c) <- zip [0..] s, i >= length s0, i < length s - length s2]
 
-parse_full_expr :: P.Parser (Expr, [String])
+parse_full_expr :: P.Parser SExpr
 parse_full_expr = do
-  (e, ss) <- parse_expr
+  (e, ss) <- OP.parse_expr (OP.ParseOpts {
+    OP.optSpace = P.spaces,
+    OP.optParens = parens,
+    OP.optLiteral = parse_literal,
+    OP.optPrefix = prefix_ops,
+    OP.optInfix = infix_ops})
   return (e, map modify_header_string ss)
 
 parse_input :: P.Parser ([Expr], [[String]])
 parse_input = do
-  result <- P.many1 parse_full_expr
+  result <- P.endBy1 parse_full_expr P.spaces
   P.eof
-  return (map fst result, (map snd result))
+  return (map fst result, map snd result)
 
 get_vars :: Expr -> [Char]
 get_vars (Var c) = [c]
@@ -116,6 +126,7 @@ get_vars (And a b) = get_vars a ++ get_vars b
 get_vars (Or a b) = get_vars a ++ get_vars b
 get_vars (Xor a b) = get_vars a ++ get_vars b
 get_vars (Cond a b) = get_vars a ++ get_vars b
+get_vars (If a b) = get_vars a ++ get_vars b
 get_vars (Bicond a b) = get_vars a ++ get_vars b
 
 powerset :: [Char] -> [M.Map Char Bool]
@@ -158,6 +169,7 @@ evaluate m (And a b) = eval_bool_fun (&&) m a b
 evaluate m (Or a b) = eval_bool_fun (||) m a b
 evaluate m (Xor a b) = eval_bool_fun (/=) m a b
 evaluate m (Cond a b) = eval_bool_fun cond m a b
+evaluate m (If a b) = eval_bool_fun (\x y -> cond y x) m a b
 evaluate m (Bicond a b) = eval_bool_fun (==) m a b
 
 truth_table :: [Char] -> [Expr] -> ([Int], [[Bool]])
@@ -172,7 +184,7 @@ bool_to_str True = "T"
 bool_to_str False = "F"
 
 get_latex :: [Expr] -> [[String]] -> Maybe String
-get_latex es sss = if length bss > 256 || length (concat sss) > 256 then Nothing
+get_latex es sss = if length bss > 64 || length (concat sss) > 32 then Nothing
   else Just (unlines ([
   "\\documentclass[border=0.4cm]{standalone}",
   "\\usepackage{colortbl}",
@@ -180,6 +192,7 @@ get_latex es sss = if length bss > 256 || length (concat sss) > 256 then Nothing
   "\\definecolor{Gray}{gray}{0.8}",
   "\\newcolumntype{w}{>{\\centering\\arraybackslash}m{0.4cm}}",
   "\\newcolumntype{g}{>{\\columncolor{Gray}}w}",
+  "\\setlength{\\arrayrulewidth}{0.4mm}",
   "\\begin{document}",
   "\\begin{tabular}{" ++ concat (replicate (length vars) "|w") ++ "||" ++
     concat (map (\(ss, i) -> replicate i 'w' ++ "g" ++
@@ -187,10 +200,10 @@ get_latex es sss = if length bss > 256 || length (concat sss) > 256 then Nothing
              (zip sss xs)) ++ "}",
   "\\hline",
   L.intercalate " & " ((map (\c -> "$" ++ [c] ++ "$") vars) ++ concat
-                       (map (\(i, ss) ->(map (\s -> "$" ++ s ++ "$")
+                       (map (\(i, ss) -> (map (\s -> "$" ++ s ++ "$")
     (whiten_strings i ss))) (zip xs sss))) ++ " \\\\",
   "\\hline"] ++ map (\bs -> L.intercalate " & " (map bool_to_str bs) ++
-                      " \\\\") bss ++ [
+                            " \\\\") bss ++ [
   "\\hline",
   "\\end{tabular}",
   "\\end{document}"]))
@@ -211,7 +224,7 @@ compile_latex s dir = I.withCurrentDirectory dir
   (do
      I.writeFile "sol.tex" s
      PR.callProcess "/usr/bin/pdflatex" ["sol.tex"]
-     PR.callProcess "/usr/bin/pdftoppm" ["-png", "-rx", "300", "-ry", "300",
+     PR.callProcess "/usr/bin/pdftoppm" ["-png", "-rx", "600", "-ry", "600",
                                          "sol.pdf", "sol"]
      I.withFile "sol-1.png" I.ReadMode B.hGetContents)
 
