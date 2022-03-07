@@ -115,7 +115,7 @@ parse_full_expr = do
 
 parse_input :: P.Parser ([Expr], [[String]])
 parse_input = do
-  result <- P.endBy1 parse_full_expr P.spaces
+  result <- P.endBy parse_full_expr P.spaces
   P.eof
   return (map fst result, map snd result)
 
@@ -183,9 +183,8 @@ bool_to_str :: Bool -> String
 bool_to_str True = "T"
 bool_to_str False = "F"
 
-get_latex :: [Expr] -> [[String]] -> Maybe String
-get_latex es sss = if length bss > 64 || length (concat sss) > 32 then Nothing
-  else Just (unlines ([
+latex_header :: String
+latex_header = unlines [
   "\\documentclass[border=0.4cm]{standalone}",
   "\\usepackage{colortbl}",
   "\\newcommand{\\Sim}{{\\sim}}",
@@ -193,7 +192,14 @@ get_latex es sss = if length bss > 64 || length (concat sss) > 32 then Nothing
   "\\newcolumntype{w}{>{\\centering\\arraybackslash}m{0.4cm}}",
   "\\newcolumntype{g}{>{\\columncolor{Gray}}w}",
   "\\setlength{\\arrayrulewidth}{0.4mm}",
-  "\\begin{document}",
+  "\\begin{document}"]
+
+latex_footer :: String
+latex_footer = "\\end{document}"
+
+get_latex :: [Expr] -> [[String]] -> Maybe String
+get_latex es sss = if length bss > 64 || length (concat sss) > 32 then Nothing
+  else if null es then Just "" else Just (unlines ([
   "\\begin{tabular}{" ++ concat (replicate (length vars) "|w") ++ "||" ++
     concat (map (\(ss, i) -> replicate i 'w' ++ "g" ++
                   replicate (length ss - 1 - i) 'w' ++ "|")
@@ -205,8 +211,7 @@ get_latex es sss = if length bss > 64 || length (concat sss) > 32 then Nothing
   "\\hline"] ++ map (\bs -> L.intercalate " & " (map bool_to_str bs) ++
                             " \\\\") bss ++ [
   "\\hline",
-  "\\end{tabular}",
-  "\\end{document}"]))
+  "\\end{tabular}"]))
   where
     vars :: [Char]
     vars = S.toList (S.fromList (concat (map get_vars es)))
@@ -222,7 +227,7 @@ get_latex es sss = if length bss > 64 || length (concat sss) > 32 then Nothing
 compile_latex :: String -> String -> IO B.ByteString
 compile_latex s dir = I.withCurrentDirectory dir
   (do
-     I.writeFile "sol.tex" s
+     I.writeFile "sol.tex" (latex_header ++ s ++ latex_footer)
      PR.callProcess "/usr/bin/pdflatex" ["sol.tex"]
      PR.callProcess "/usr/bin/pdftoppm" ["-png", "-rx", "600", "-ry", "600",
                                          "sol.pdf", "sol"]
