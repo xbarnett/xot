@@ -236,7 +236,7 @@ compile_latex s dir = I.withCurrentDirectory dir
 generate_truth_table :: String -> IO (Either String B.ByteString)
 generate_truth_table formula =
   case P.parse parse_input "" formula of
-    Left e -> return (Left ("parse error: " ++ show e))
+    Left _ -> return (Left "parse error")
     Right (es, sss) -> case get_latex es sss of
         Nothing -> return (Left "formula too complicated")
         Just code -> do
