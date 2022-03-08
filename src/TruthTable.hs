@@ -49,8 +49,10 @@ parens parser = P.choice (map (\(p0, p1) -> paren_type p0 p1 parser)
 parse_constant :: P.Parser SExpr
 parse_constant = do
   P.spaces
-  result <- P.oneOf "TF"
-  return (Const (result == 'T'), ["\\mathrm{" ++ [result] ++ "} "])
+  result <- P.oneOf "TF01"
+  let is_true = elem result "T1"
+  return (Const is_true, ["\\mathrm{" ++ (if is_true then "T" else "F")
+                          ++ "} "])
 
 parse_variable :: P.Parser SExpr
 parse_variable = do
