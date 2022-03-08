@@ -15,7 +15,8 @@ import qualified Text.Parsec as P
 import qualified Text.Parsec.String as P
 import qualified Text.Parsec.Token as P
 
-data Expr = Var Char |
+data Expr = Const Bool |
+  Var Char |
   Not Expr |
   And Expr Expr |
   Or Expr Expr |
@@ -45,11 +46,20 @@ parens :: P.Parser SExpr -> P.Parser SExpr
 parens parser = P.choice (map (\(p0, p1) -> paren_type p0 p1 parser)
   paren_strings)
 
-parse_literal :: P.Parser SExpr
-parse_literal = do
+parse_constant :: P.Parser SExpr
+parse_constant = do
+  P.spaces
+  result <- P.oneOf "TF"
+  return (Const (result == 'T'), ["\\mathrm{" ++ [result] ++ "} "])
+
+parse_variable :: P.Parser SExpr
+parse_variable = do
   P.spaces
   result <- P.satisfy C.isAsciiLower
   return (Var result, [[result]])
+
+parse_literal :: P.Parser SExpr
+parse_literal = parse_constant P.<|> parse_variable
 
 lift_unary :: String -> [String] -> (Expr -> Expr) -> [(String, SExpr -> SExpr)]
 lift_unary name op_strings fun = map (\op_string -> (op_string, lifted_fun))
@@ -67,12 +77,13 @@ lift_binary name op_strings assoc fun = map (\op_string ->
     lifted_fun (e0, s0) (e1, s1) = (fun e0 e1, s0 ++ [name] ++ s1)
 
 prefix_ops :: M.Map String (SExpr -> SExpr)
-prefix_ops = M.fromList (lift_unary "\\Sim" ["~", "!", "not"] Not)
+prefix_ops = M.fromList (lift_unary "\\neg" ["~", "!", "not"] Not)
 
 infix_ops :: [M.Map String (OP.Assoc, SExpr -> SExpr -> SExpr)]
 infix_ops = map (M.fromList . concat) [
   [
-  lift_binary "\\to" [">", "->", "implies", "only if"] OP.LeftAssoc Cond,
+  lift_binary "\\rightarrow" [">", "->", "implies", "only if"]
+    OP.LeftAssoc Cond,
   lift_binary "\\leftarrow" ["<", "<-", "if"] OP.LeftAssoc If,
   lift_binary "\\leftrightarrow" ["<>", "<->", "=", "iff", "if and only if"]
     OP.LeftAssoc Bicond],
@@ -120,6 +131,7 @@ parse_input = do
   return (map fst result, map snd result)
 
 get_vars :: Expr -> [Char]
+get_vars (Const c) = []
 get_vars (Var c) = [c]
 get_vars (Not a) = get_vars a
 get_vars (And a b) = get_vars a ++ get_vars b
@@ -156,6 +168,7 @@ eval_bool_fun f m a b = (xs ++ [val] ++ ys, length xs)
     val = f (xs !! i) (ys !! j)
 
 evaluate :: M.Map Char Bool -> Expr -> ([Bool], Int)
+evaluate m (Const b) = ([b], 0)
 evaluate m (Var s) = ([m M.! s], 0)
 evaluate m (Not a) = (val : xs, 0)
   where
