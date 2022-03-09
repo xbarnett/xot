@@ -92,7 +92,7 @@ infix_ops = map (M.fromList . concat) [
   [
   lift_binary "\\land" ["&", "&&", "*", "and"] OP.LeftAssoc And,
   lift_binary "\\lor" ["|", "||", "or"] OP.LeftAssoc Or,
-  lift_binary "\\oplus" ["+", "!=", "xor"] OP.LeftAssoc Xor]]
+  lift_binary "\\oplus" ["+", "-", "!=", "xor"] OP.LeftAssoc Xor]]
 
 fix_braces :: String -> String
 fix_braces "" = ""
